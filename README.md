@@ -1,2 +1,2 @@
-# cardboard-threejs
-Google Cardboard - ThreeJS integration with online example
+# Cardboard Three.JS
+Google Cardboard - ThreeJS integration with online support example

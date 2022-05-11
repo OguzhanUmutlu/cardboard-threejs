@@ -5,24 +5,27 @@
     <title>Cardboard Three.JS</title>
     <!-- set icon to icon.png -->
     <link rel="icon" type="image/png" href="icon.png">
+    <style>
+        * {
+            color: white;
+            font-family: Calibri, serif;
+        }
+    </style>
 </head>
-<body style="background: black; overflow: hidden">
-<div hidden id="vr" style="cursor: none">
+<body style="background: black; overflow: hidden; user-select: none">
+<div hidden id="vr">
     <img src="img.png" id="img" style="position: absolute; left: 0; top: 0; z-index: 10" alt="">
-    <div id="left" style="position: absolute; left: 60px; top: 0">
-    </div>
-    <div id="right" style="position: absolute; left: 50%; top: 0">
-    </div>
-    <span id="ping" style="color: white; font-family: Calibri, serif; z-index: 9">test</span>
+    <div id="left" style="position: absolute; left: 60px; top: 0"></div>
+    <div id="right" style="position: absolute; left: 50%; top: 0"></div>
 </div>
 <div hidden id="pause"
      style="background: rgba(255,255,255,0.3); position: absolute; left: 0; top: 0; width: 100%; height: 100%">
     <span id="pauseText"
-          style="font-family: Calibri, serif; font-size: 20px; color: white; position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%)">
-    </span>
+          style="font-size: 20px; position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%)"></span>
 </div>
 </body>
 <script src="socket.min.js"></script>
 <script src="three.min.js"></script>
+<script src="GLTFLoader.js"></script>
 <script src="script.js"></script>
 </html>
