@@ -43,13 +43,14 @@ class Client {
     hasPing = false;
     actionId = 0;
     moveKey = null;
+    model = "./Soldier.glb";
 
     constructor(socket) {
         this.socket = socket;
     }
 
     log(n) {
-        console.log(`[USER #${this.uuid}] ${n}`);
+        console.info(`[USER #${this.uuid}] ${n}`);
     }
 
     init() {
@@ -87,12 +88,12 @@ class Client {
                     this.kick("", "client disconnect");
                 });
                 this.socket.on("chat", ev => {
-                    if (!clients.has(this.uuid)) return;
+                    if (!clients.has(this.uuid) || typeof ev !== "object") return;
                     const msg = `Guest ${this.uuid}: ${ev.message}`;
                     broadcastMessage(msg);
                 });
                 this.socket.on("move", ev => {
-                    if (!clients.has(this.uuid)) return;
+                    if (!clients.has(this.uuid) || typeof ev !== "object") return;
                     if (this.distance(ev.position) > 10) return this.kick("Illegal move packet.", "client disconnect");
                     if (this.moveKey && this.moveKey !== ev.key) return this.kick("Unauthorized move packet.", "client disconnect");
                     this.moveKey = Math.random();
@@ -101,6 +102,7 @@ class Client {
                     this.pitch = ev.pitch;
                     this.headYaw = ev.headYaw;
                     this.actionId = ev.actionId;
+                    if (![0, 1, 2].includes(ev.actionId)) this.actionId = 0;
                     const pk = {
                         time: time(),
                         entity: this.parseEntity()
@@ -108,6 +110,16 @@ class Client {
                     broadcastEmit("updateEntity", x => ({
                         ...pk,
                         uuid: x, ...(x === this.uuid ? {nextKey: this.moveKey} : {})
+                    }));
+                });
+                this.socket.on("setModel", ev => {
+                    if (!clients.has(this.uuid) || typeof ev !== "object") return;
+                    this.model = ["./Soldier.glb", "./Robot.glb"][ev.model] || "./Soldier.glb";
+                    this.entity = this.parseEntity();
+                    broadcastEmit("updateEntity", x => ({
+                        time: time(),
+                        uuid: x,
+                        entity: this.parseEntity()
                     }));
                 });
             });
@@ -121,7 +133,8 @@ class Client {
             yaw: this.yaw,
             pitch: this.pitch,
             headYaw: this.headYaw,
-            action: this.actionId
+            model: this.model,
+            actionId: this.actionId
         };
     }
 

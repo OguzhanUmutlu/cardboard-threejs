@@ -71,35 +71,110 @@ async function openFullscreen() {
     if (elem["msRequestFullscreen"]) return await elem["msRequestFullscreen"]();
 }
 
-async function loadGLTFModel(glbFile) {
-    return await new Promise(r => {
+const gltfModels = [];
+
+class GLTFModel {
+    static SOLDIER_STATES = {"Idle": "Idle", "Run": "Run", "TPose": "TPose", "Walk": "Walk"};
+    static ROBOT_STATES = {
+        "Idle": "Idle",
+        "Walking": "Walking",
+        "Running": "Running",
+        "Dance": "Dance",
+        "Death": "Death",
+        "Sitting": "Sitting",
+        "Standing": "Standing"
+    };
+    static ROBOT_EMOTES = {
+        "Jump": "Jump",
+        "Yes": "Yes",
+        "No": "No",
+        "Wave": "Wave",
+        "Punch": "Punch",
+        "ThumbsUp": "ThumbsUp"
+    };
+
+    static LOOP_TYPES = {
+        ONCE: THREE.LoopOnce,
+        REPEAT: THREE.LoopRepeat,
+        PING_PONG: THREE.LoopPingPong
+    };
+
+    constructor(file) {
+        this.file = file;
+    }
+
+    async init() {
         const loader = new THREE.GLTFLoader();
-        loader.load(glbFile, function (gltf) {
-            const model = gltf.scene;
-            model.rotation.order = "YXZ";
-            const skeleton = new THREE.SkeletonHelper(model);
-            skeleton.visible = false;
-            const animations = gltf.animations, mixer = new THREE.AnimationMixer(model);
-            const clock = new THREE.Clock();
-            model._data = {
-                animations: {
-                    idle: mixer.clipAction(animations[0]),
-                    walk: mixer.clipAction(animations[3]),
-                    run: mixer.clipAction(animations[1])/*,
-                    jump,
-                    fall,
-                    land,
-                    hurt,
-                    die*/
-                }
-            };
-            r({
-                skeleton, model, updateMixer: () => {
-                    mixer.update(clock.getDelta());
-                }
-            });
-        });
-    });
+        // noinspection JSUnresolvedFunction
+        this.gltf = await new Promise(r => loader.load(this.file, r));
+        this.model = this.gltf.scene;
+        this.model.rotation.order = "YXZ";
+        this.skeleton = new THREE.SkeletonHelper(this.model);
+        this.skeleton.visible = false;
+        const animations = this.gltf.animations;
+        this.mixer = new THREE.AnimationMixer(this.model);
+        gltfModels.push(this);
+        this.clock = new THREE.Clock();
+        this.currentAction = null;
+        this.animations = {};
+        this.model._data = this;
+        for (let i = 0; i < animations.length; i++) {
+            const clip = animations[i];
+            // noinspection JSUnresolvedFunction
+            const action = this.mixer.clipAction(clip);
+            this.model._data.animations[clip.name] = action;
+            switch (this.file) {
+                case "./Soldier.glb":
+                    break;
+                case "./Robot.glb":
+                    if (GLTFModel.ROBOT_EMOTES[clip.name] || ["Punch", "ThumbsUp"].includes(clip.name) >= 4) {
+                        action.clampWhenFinished = true;
+                        action.loop = GLTFModel.LOOP_TYPES.ONCE;
+                    }
+                    break;
+            }
+        }
+        return this;
+    }
+
+    updateMixer() {
+        this.mixer.update(this.clock.getDelta());
+    }
+
+    setWeight(action, weight) {
+        action.enabled = true;
+        action.setEffectiveTimeScale(1);
+        action.setEffectiveWeight(weight);
+    }
+
+    fadeToAction(action, duration) {
+        this.currentAction = action;
+        if (this.currentAction !== action && this.currentAction) this.currentAction.fadeOut(duration);
+        if (this.currentAction === action) return;
+        this.currentAction = action;
+        action.reset()
+            .setEffectiveTimeScale(1)
+            .setEffectiveWeight(1)
+            .fadeIn(duration)
+            .play();
+        console.log(action);
+    }
+
+    executeCrossFade(startAction, endAction, duration) {
+        this.setWeight(endAction, 1);
+        endAction.time = 0;
+        startAction.crossFadeTo(endAction, duration, true);
+    }
+
+    playAction(action) {
+        this.currentAction = action;
+        action.enabled = true;
+        action.play();
+    }
+}
+
+async function loadGLTFModel(glbFile) {
+    return new GLTFModel(glbFile).init();
 }
 
 function getFormattedTime(t) {
@@ -212,29 +287,57 @@ async function init() {
         actionId = 0;
         lastActionId = -1;
         closed = true;
+        modelCache = {};
 
         /**
          * @param {number} x
          * @param {number} y
          * @param {number} z
          * @param {number} uuid
-         * @param model
+         * @param {string} modelId
          */
-        constructor(x, y, z, uuid, model) {
+        constructor(x, y, z, uuid, modelId) {
             super(x, y, z);
             this.uuid = uuid;
-            this.model = model;
+            this.modelId = modelId;
         }
 
-        init() {
+        async init() {
+            await this.setModel(this.modelId, true, true);
             this.closed = false;
             serverData.entities[this.uuid] = this;
             scene.add(this.model);
         }
 
+        async setModel(id, update = true, force = false) {
+            if (this.modelId !== id || force) {
+                this.modelId = id;
+                const m = this.modelCache[id] = (this.modelCache[id] || (await loadGLTFModel(this.modelId)).model);
+                if (update) {
+                    if (this.model) scene.remove(this.model);
+                    scene.add(this.model = m);
+                }
+                switch (id) {
+                    case "./Soldier.glb":
+                        break;
+                    case "./Robot.glb":
+                        this.model._data.gltf.scene.scale.set(.35, .35, .35)
+                        break;
+                }
+            }
+        }
+
         static getDirection(yaw, pitch, n = 1) {
             const v = new THREE.Vector3(0, 0, 1).applyQuaternion(new THREE.Quaternion().setFromEuler(new THREE.Euler(pitch, yaw, 0)));
             return new V3(v.x, v.y, v.z).mulScalar(-1 * n);
+        }
+
+        static getLeftDirection(yaw, pitch, n = 1) {
+            return Entity.getDirection(yaw - Math.PI / 2, pitch, n);
+        }
+
+        static getRightDirection(yaw, pitch, n = 1) {
+            return Entity.getDirection(yaw + Math.PI / 2, pitch, n);
         }
 
         getDirection(n = 1) {
@@ -253,18 +356,39 @@ async function init() {
          * @returns {boolean}
          */
         update() {
+            if (!(this instanceof Player)) {
+                if (!this._text) {
+                    this._text = createText("Guest " + this.uuid);
+                    scene.add(this._text);
+                }
+                this._text.rotation.order = "YXZ";
+                const yaw = player.yaw + player.headYaw;
+                const y = this.getYawTo(player.clone());
+                this._text.position.x = this.x - 1.1;
+                this._text.position.y = this.y + this.eyeHeight + 0.2;
+                this._text.position.z = this.z;
+                this._text.rotation.y = yaw;
+            }
+            this.updateModel();
+            return true;
+        }
+
+        updateModel() {
             if (this.model) {
                 this.model.position.x = this.x;
                 this.model.position.y = this.y;
                 this.model.position.z = this.z;
                 this.model.rotation.y = this.yaw;
-                this.model.rotation.x = this.pitch;
+                //this.model.rotation.x = this.pitch;
                 if (this.actionId !== this.lastActionId) {
                     this.lastActionId = this.actionId;
-                    this.model._data.animations[["idle", "walk"][this.actionId] || "idle"].play();
+                    const ACTION_MAP = [
+                        [GLTFModel.SOLDIER_STATES.Idle, GLTFModel.SOLDIER_STATES.Walk, GLTFModel.SOLDIER_STATES.Run],
+                        [GLTFModel.ROBOT_STATES.Idle, GLTFModel.ROBOT_STATES.Walking, GLTFModel.ROBOT_STATES.Running],
+                    ];
+                    this.model._data.fadeToAction(this.model._data.animations[ACTION_MAP[["./Soldier.glb", "./Robot.glb"].indexOf(this.model._data.file)][this.actionId]]);
                 }
             }
-            return true;
         }
 
         lookAt(v) {
@@ -277,6 +401,8 @@ async function init() {
             this.closed = true;
             if (this.model) scene.remove(this.model);
             delete serverData.entities[this.uuid];
+            if (this._text) scene.remove(this._text);
+            this._text = null;
             return this;
         }
     }
@@ -296,10 +422,10 @@ async function init() {
          * @param {number} y
          * @param {number} z
          * @param {number} uuid
-         * @param model
+         * @param {string} modelId
          */
-        constructor(x, y, z, uuid, model) {
-            super(x, y, z, uuid, model);
+        constructor(x, y, z, uuid, modelId) {
+            super(x, y, z, uuid, modelId);
         }
 
         move(x, y, z) {
@@ -345,7 +471,7 @@ async function init() {
          * @param {Socket} socket
          */
         constructor(x, y, z, uuid, socket) {
-            super(x, y, z, uuid, null);
+            super(x, y, z, uuid, "./Soldier.glb");
             this.socket = socket;
         }
 
@@ -360,13 +486,16 @@ async function init() {
                 alert("You got kicked!\nReason: " + ev.reason);
                 window.location.reload();
             });
+            socket.on("disconnect", ev => {
+                alert("Connection lost!");
+                window.location.reload();
+            });
             socket.on("open", async ev => {
                 if (++_open >= 2) window.location.reload();
                 updatePing(ev.time);
                 serverData.uuid = ev.uuid;
                 socket.emit("ready2");
                 player.uuid = ev.uuid;
-                // TODO: store player positions in server etc.
                 await chatPromise;
                 const {chat} = ev;
                 messageDiv.forEach(i => {
@@ -381,12 +510,12 @@ async function init() {
                 ev.entities.forEach(async ev => {
                     const {entity} = ev;
                     if (player.uuid === entity.uuid || serverData.entities[entity.uuid]) return;
-                    const {model} = await loadGLTFModel("./Soldier.glb");
-                    const ent = new Entity(entity.position.x, entity.position.y, entity.position.z, entity.uuid, model);
+                    const ent = new Entity(entity.position.x, entity.position.y, entity.position.z, entity.uuid, entity.model);
                     ent.yaw = entity.yaw;
                     ent.pitch = entity.pitch;
                     ent.headYaw = entity.headYaw;
-                    ent.init();
+                    await ent.init();
+                    window.ff = ent;
                 });
             });
             socket.on("removeEntity", ev => {
@@ -411,9 +540,10 @@ async function init() {
                 ent.pitch = entity.pitch;
                 ent.headYaw = entity.headYaw;
                 ent.actionId = entity.actionId;
+                ent.setModel(entity.model);
             });
             socket.emit("ready");
-            this._model = (await loadGLTFModel("./Soldier.glb")).model;
+            this._model = (await loadGLTFModel(this.modelId)).model;
         }
 
         updateCamera() {
@@ -426,11 +556,13 @@ async function init() {
                     camera.rotation.y = this.yaw + this.headYaw;
                     break;
                 case 1:
+                    // noinspection JSUnresolvedFunction
                     pos = this.clone().add(new V3(0, this.eyeHeight * 1.5, 0)).sub(Entity.getDirection(this.yaw, 0).mulScalar(2).setY(0));
                     camera.position.set(pos.x, pos.y, pos.z);
                     camera.lookAt(new THREE.Vector3(this.x, this.y + this.eyeHeight, this.z));
                     break;
                 case 2:
+                    // noinspection JSUnresolvedFunction
                     pos = this.clone().add(new V3(0, this.eyeHeight * 1.5, 0)).sub(Entity.getDirection(this.yaw, 0).mulScalar(-2).setY(0));
                     camera.position.set(pos.x, pos.y, pos.z);
                     camera.lookAt(new THREE.Vector3(this.x, this.y + this.eyeHeight, this.z));
@@ -477,6 +609,7 @@ async function init() {
             this.isFirstMove = false;
             this.lastPos = this.clone();
             this.lastYawNPitch = [this.yaw, this.headYaw, this.pitch];
+            if (this.lastActionId !== this.action) this.lastActionId = this.action;
             this.socket.emit("move", {
                 position: {x: this.x, y: this.y, z: this.z},
                 yaw: this.yaw,
@@ -487,6 +620,43 @@ async function init() {
             });
             this.moveKey = null;
             return true;
+        }
+
+        async updateModelId(id) {
+            await this.setModel(["./Soldier.glb", "./Robot.glb"][id], !!this.perspectiveMode);
+            this.socket.emit("updateModel", {model: id});
+        }
+    }
+
+    class RigidBody {
+        constructor() {
+        }
+
+        createBox(mass, pos, quat, size) {
+            this.transform = new Ammo.btTransform();
+            this.transform.setIdentity();
+            this.transform.setOrigin(new Ammo.btVector3(pos.x, pos.y, pos.z));
+            this.transform.setRotation(new Ammo.btQuaternion(quat.x, quat.y, quat.z, quat.w));
+            this.motionState = new Ammo.btDefaultMotionState(this.transform);
+            this.btSize = new Ammo.btVector3(size.x * .5, size.y * .5, size.z * .5);
+            this.shape = new Ammo.btBoxShape(this.btSize);
+            this.localInertia = new Ammo.btVector3(0, 0, 0);
+            if (mass > 0) this.shape.calculateLocalInertia(mass, this.localInertia);
+            this.info = new Ammo.btRigidBodyConstructionInfo(mass, this.motionState, this.shape, this.localInertia);
+            this.body = new Ammo.btRigidBody(this.info);
+        }
+
+        createSphere(mass, pos, quat, radius) {
+            this.transform = new Ammo.btTransform();
+            this.transform.setIdentity();
+            this.transform.setOrigin(new Ammo.btVector3(pos.x, pos.y, pos.z));
+            this.transform.setRotation(new Ammo.btQuaternion(quat.x, quat.y, quat.z, quat.w));
+            this.motionState = new Ammo.btDefaultMotionState(this.transform);
+            this.shape = new Ammo.btSphereShape(radius);
+            this.localInertia = new Ammo.btVector3(0, 0, 0);
+            if (mass > 0) this.shape.calculateLocalInertia(mass, this.localInertia);
+            this.info = new Ammo.btRigidBodyConstructionInfo(mass, this.motionState, this.shape, this.localInertia);
+            this.body = new Ammo.btRigidBody(this.info);
         }
     }
 
@@ -510,7 +680,22 @@ async function init() {
         camera.updateProjectionMatrix();
         renderer.setSize(width(), window.innerHeight);
         renderer2.setSize(width(), window.innerHeight);
+        const select_menu = document.getElementById("select_menu");
+        const x = Math.min(window.innerWidth, window.innerHeight);
+        select_menu.style.width = x * .8 + "px";
+        select_menu.style.height = x * .8 + "px";
     }
+
+    window.Ammo = await Ammo();
+
+    const collisionConfiguration = new Ammo.btDefaultCollisionConfiguration();
+    const dispatcher = new Ammo.btCollisionDispatcher(collisionConfiguration);
+    const broadphase = new Ammo.btDbvtBroadphase();
+    const solver = new Ammo.btSequentialImpulseConstraintSolver();
+    const physicsWorld = new Ammo.btDiscreteDynamicsWorld(dispatcher, broadphase, solver, collisionConfiguration);
+    physicsWorld.setGravity(new Ammo.btVector3(0, -10, 0));
+
+    const transformAux1 = new Ammo.btTransform();
 
     const renderer = new THREE.WebGLRenderer();
     leftDiv.appendChild(renderer.domElement);
@@ -519,18 +704,63 @@ async function init() {
     const img = document.getElementById("img");
     onResize();
     scene.background = new THREE.Color(0xa0a0a0);
-    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(10, 10), new THREE.MeshBasicMaterial({color: new THREE.Color(0x00ff00)}));
-    mesh.rotation.x = -Math.PI / 2;
-    mesh.position.y = -2;
-    mesh.receiveShadow = true;
-    scene.add(mesh);
+
+    function createBoxBody(mass, pos, quat, size, color) {
+        const box = new THREE.Mesh(new THREE.BoxGeometry(size.x, size.y, size.z), new THREE.MeshPhongMaterial({color}));
+        box.castShadow = true;
+        box.receiveShadow = true;
+        scene.add(box);
+
+        const rbBox = new RigidBody();
+        rbBox.createBox(mass, new THREE.Vector3(pos.x, pos.y, pos.z), new THREE.Quaternion(), new THREE.Vector3(size.x, size.y, size.z));
+        physicsWorld.addRigidBody(rbBox.body);
+
+        rigidBodies.push({mesh: box, rigidBody: rbBox});
+        return {box, rigid: rbBox};
+    }
+
+    function createSphereBody(mass, pos, quat, radius, color) {
+        const sphere = new THREE.Mesh(new THREE.SphereGeometry(radius), new THREE.MeshPhongMaterial({color}));
+        sphere.castShadow = true;
+        sphere.receiveShadow = true;
+        scene.add(sphere);
+
+        const rbSphere = new RigidBody();
+        rbSphere.createSphere(mass, new THREE.Vector3(pos.x, pos.y, pos.z), new THREE.Quaternion(), radius);
+        physicsWorld.addRigidBody(rbSphere.body);
+
+        rigidBodies.push({mesh: sphere, rigidBody: rbSphere});
+        return {sphere, rigid: rbSphere};
+    }
+
+    const rigidBodies = [];
+
+    createBoxBody(0, new THREE.Vector3(0, -1, 0), new THREE.Quaternion(), new THREE.Vector3(100, 1, 100), 0x808080);
+
+    let isPaused = false;
+    addEventListener("mousemove", ev => {
+        if (!isPaused) return;
+        if (mouseDown && mouseDownButton === 0) {
+            const {rigid} = createSphereBody(.01, camera.position.clone(), camera.quaternion.clone(), 0.1, 0x00ff00);
+            const direction = player.getDirection(10);
+            const cameraForce = new Ammo.btVector3(direction.x, direction.y, direction.z);
+            rigid.body.applyForce(cameraForce);
+        }
+    });
+
+    addEventListener("mousemove", ev => {
+        document.getElementById("cursor").style.display = "block";
+        document.getElementById("cursor").style.left = ev.clientX + "px";
+        document.getElementById("cursor").style.top = ev.clientY + "px";
+    });
+
     scene.background = new THREE.Color(0xa0a0a0);
     scene.fog = new THREE.Fog(0xa0a0a0, 10, 50);
     const serverData = {uuid: null, /*** @type {Object<number, Entity>} */entities: {}};
     let cP;
     let chatPromise = new Promise(r => cP = r);
     const player = new Player(0, 0, 0, -1, socket);
-    player.init();
+    await player.init();
     const hemiLight = new THREE.HemisphereLight(0xffffff, 0x444444);
     hemiLight.position.set(0, 256, 0);
     scene.add(hemiLight);
@@ -544,7 +774,6 @@ async function init() {
     dirLight.shadow.camera.near = 0.1;
     dirLight.shadow.camera.far = 40;
     scene.add(dirLight);
-    let isPaused = false;
     pauseDiv.style.display = "block";
     document.getElementById("pauseText").innerHTML = "Click to start";
     let fsSend = false;
@@ -646,6 +875,31 @@ async function init() {
             m.scrollTop = m.scrollHeight;
         });
     });
+    const loader = new THREE.FontLoader();
+    const font = await new Promise(r => loader.load("../fonts/optimer.regular.json", r));
+
+    function createText(text) {
+        const textGeo = new THREE.TextGeometry(text, {
+            font: font,
+            size: 0.5,
+            height: 0.001,
+            curveSegments: 5
+        });
+        const textMesh1 = new THREE.Mesh(textGeo, [
+            new THREE.MeshPhongMaterial({color: 0x000000, flatShading: true}),
+            new THREE.MeshPhongMaterial({color: 0x000000})
+        ]);
+        textMesh1.position.x = 0;
+        textMesh1.position.y = 2;
+        textMesh1.position.z = 0;
+        textMesh1.rotation.x = 0;
+        textMesh1.rotation.y = Math.PI * 2;
+        //scene.add(textMesh1); make this 2d, https://stackoverflow.com/questions/15248872/dynamically-create-2d-text-in-three-js
+        return textMesh1;
+    }
+
+    let lastTick = Date.now();
+    const color = new THREE.Color();
 
     async function animate() {
         if (isMobile() !== isMob) return window.location.reload();
@@ -687,24 +941,24 @@ async function init() {
                     if (isMobile()) {
                         if (mouseDown) {
                             player.actionId = 1;
-                            player.move(player.getDirection(.1).setY(0));
+                            player.move(Entity.getDirection(player.yaw, 0, .1).setY(0));
                         }
                     } else {
                         if (heldKeys["w"]) {
                             player.actionId = 1;
-                            player.move(player.getDirection(.1).setY(0));
+                            player.move(Entity.getDirection(player.yaw, 0, .1).setY(0));
                         }
                         if (heldKeys["s"]) {
                             player.actionId = 1;
-                            player.move(player.getDirection(-.1).setY(0));
+                            player.move(Entity.getDirection(player.yaw, 0, -.1).setY(0));
                         }
                         if (heldKeys["a"]) {
                             player.actionId = 1;
-                            player.move(player.getRightDirection(.1).setY(0));
+                            player.move(Entity.getRightDirection(player.yaw, 0, .1).setY(0));
                         }
                         if (heldKeys["d"]) {
                             player.actionId = 1;
-                            player.move(player.getLeftDirection(.1).setY(0));
+                            player.move(Entity.getLeftDirection(player.yaw, 0, .1).setY(0));
                         }
                     }
                     leftDiv.style.left = "0";
@@ -717,11 +971,25 @@ async function init() {
                 }
             }
         }
-        // TODO: model
         // TODO: nametag text on top
-        // TODO: https://threejs.org/docs/examples/en/controls/PointerLockControls.html
         // TODO: animations
-        // TODO: light for model
+        // TODO: model selection
+        const timeElapsed = Date.now() - lastTick;
+        lastTick = Date.now();
+        physicsWorld.stepSimulation(timeElapsed / 1000, 10);
+        gltfModels.forEach(model => {
+            model.updateMixer();
+        });
+
+        for (let i = 0; i < rigidBodies.length; i++) {
+            rigidBodies[i].rigidBody.motionState.getWorldTransform(transformAux1);
+            const pos = transformAux1.getOrigin();
+            const quat = transformAux1.getRotation();
+            const pos3 = new THREE.Vector3(pos.x(), pos.y(), pos.z());
+            const quat3 = new THREE.Quaternion(quat.x(), quat.y(), quat.z(), quat.w());
+            rigidBodies[i].mesh.position.copy(pos3);
+            rigidBodies[i].mesh.quaternion.copy(quat3);
+        }
         requestAnimationFrame(animate);
     }
 
@@ -729,15 +997,18 @@ async function init() {
     let mouseDown = false;
     let middleMouseDown = false;
     let rightMouseDown = false;
+    let mouseDownButton = -1;
     vrDiv.addEventListener("mousedown", ev => {
         mouseDown = true;
         if (ev.button === 1) middleMouseDown = true;
         if (ev.button === 2) rightMouseDown = true;
+        mouseDownButton = ev.button;
     });
     vrDiv.addEventListener("mouseup", ev => {
         mouseDown = false;
         if (ev.button === 1) middleMouseDown = false;
         if (ev.button === 2) rightMouseDown = false;
+        mouseDownButton = -1;
     });
     vrDiv.addEventListener("click", () => isVROn() ? player.move(player.getDirection().setY(0)) : null);
     vrDiv.addEventListener("touchstart", ev => mouse = [ev.touches[0].clientX, ev.touches[0].clientY]);
@@ -749,7 +1020,21 @@ async function init() {
         if (beta === null) return;
         alert("0:" + alpha + ":" + beta + ":" + gamma);
     });
-    addEventListener("keydown", ev => ev.key === "Escape" && !isVROn() && isPaused ? pause() : null);
+    addEventListener("keydown", ev => {
+        if (ev.key === "Escape" && !isVROn() && isPaused) pause();
+        switch (ev.key) {
+            case "z":
+                document.getElementById("select_menu").hidden = false;
+                break;
+        }
+    });
+    addEventListener("keyup", ev => {
+        switch (ev.key) {
+            case "z":
+                document.getElementById("select_menu").hidden = true;
+                break;
+        }
+    });
     window.addEventListener("deviceorientation", ev => {
         const {alpha, beta, gamma} = ev;
         if (beta === null) return;

@@ -5,6 +5,7 @@
     <title>Cardboard Three.JS</title>
     <!-- set icon to icon.png -->
     <link rel="icon" type="image/png" href="icon.png">
+    <script src="https://cdn.jsdelivr.net/gh/kripken/ammo.js@HEAD/builds/ammo.wasm.js"></script>
     <style>
         * {
             color: white;
@@ -12,7 +13,7 @@
         }
     </style>
 </head>
-<body style="background: black; overflow: hidden; user-select: none">
+<body style="background: black; overflow: hidden; user-select: none; cursor: none">
 <div hidden id="vr">
     <img src="img.png" id="img" style="position: absolute; left: 0; top: 0; z-index: 10" alt="">
     <div id="left" style="position: absolute; left: 60px; top: 0"></div>
@@ -23,9 +24,16 @@
     <span id="pauseText"
           style="font-size: 20px; position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%)"></span>
 </div>
+<div id="cursor"
+     style="position: absolute; display: none; left: 0; top: 0; border-radius: 50%; background: blue; width: 10px; height: 10px"></div>
+<div id="select_menu" hidden
+     style="position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); background: rgba(0, 0, 0, 0.3); border-radius: 50%; pointer-events: none">
+</div>
 </body>
 <script src="socket.min.js"></script>
-<script src="three.min.js"></script>
-<script src="GLTFLoader.js"></script>
+<script src="threejs/three.min.js"></script>
+<script src="threejs/GLTFLoader.js"></script>
+<script src="threejs/TextGeometry.js"></script>
+<script src="threejs/FontLoader.js"></script>
 <script src="src/script.js"></script>
 </html>
